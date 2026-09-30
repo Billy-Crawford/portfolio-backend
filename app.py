@@ -1,4 +1,6 @@
 import os
+import jwt
+import datetime
 from functools import wraps
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -9,11 +11,20 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(current_dir, ".env"))
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "billy2026")
+# ── CORS : restreint au domaine Vercel en prod ─────────────────────────────────
+ALLOWED_ORIGINS = [
+    "https://obilly-portfolio.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGINS}}, supports_credentials=True)
+
+SUPABASE_URL    = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY    = os.getenv("SUPABASE_KEY", "")
+ADMIN_PASSWORD  = os.getenv("ADMIN_PASSWORD", "")
+JWT_SECRET      = os.getenv("JWT_SECRET", "changeme")
+JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "24"))
 
 supabase_client: Client = None
 
@@ -23,29 +34,58 @@ def get_supabase() -> Client:
         supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
     return supabase_client
 
+# ── JWT helpers ────────────────────────────────────────────────────────────────
+def generate_token() -> str:
+    payload = {
+        "sub": "admin",
+        "iat": datetime.datetime.now(datetime.timezone.utc),
+        "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=JWT_EXPIRY_HOURS),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+def verify_token(token: str) -> bool:
+    try:
+        jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        return True
+    except jwt.ExpiredSignatureError:
+        return False
+    except jwt.InvalidTokenError:
+        return False
+
 def require_admin(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer ") or auth.split(" ")[1] != ADMIN_PASSWORD:
-            return jsonify({"error": "Non autorise"}), 401
+        if not auth.startswith("Bearer "):
+            return jsonify({"error": "Token manquant"}), 401
+        token = auth.split(" ", 1)[1]
+        if not verify_token(token):
+            return jsonify({"error": "Token invalide ou expire"}), 401
         return f(*args, **kwargs)
     return decorated
 
-# ── Sante ─────────────────────────────────────────────────────────────────────
+# ── Sante ──────────────────────────────────────────────────────────────────────
 @app.route("/api/health", methods=["GET"])
 def health():
     return jsonify({"status": "online", "message": "API Flask operationnelle"}), 200
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+# ── Auth ────────────────────────────────────────────────────────────────────────
 @app.route("/api/auth/login", methods=["POST"])
 def login():
     data = request.get_json() or {}
     if data.get("password") == ADMIN_PASSWORD:
-        return jsonify({"success": True, "token": ADMIN_PASSWORD}), 200
+        token = generate_token()
+        return jsonify({"success": True, "token": token, "expires_in": f"{JWT_EXPIRY_HOURS}h"}), 200
     return jsonify({"error": "Mot de passe incorrect"}), 401
 
-# ── Projets ───────────────────────────────────────────────────────────────────
+@app.route("/api/auth/verify", methods=["GET"])
+def verify():
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer ") and verify_token(auth.split(" ", 1)[1]):
+        return jsonify({"valid": True}), 200
+    return jsonify({"valid": False}), 401
+
+# ── Projets ────────────────────────────────────────────────────────────────────
 @app.route("/api/projects", methods=["GET"])
 def get_projects():
     try:
@@ -76,8 +116,7 @@ def create_project():
 def update_project(pid):
     try:
         data = request.get_json() or {}
-        data.pop("id", None)
-        data.pop("created_at", None)
+        data.pop("id", None); data.pop("created_at", None)
         res = get_supabase().table("projects").update(data).eq("id", pid).execute()
         return jsonify(res.data[0] if res.data else {}), 200
     except Exception as e:
@@ -92,7 +131,7 @@ def delete_project(pid):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ── Competences ───────────────────────────────────────────────────────────────
+# ── Competences ────────────────────────────────────────────────────────────────
 @app.route("/api/skills", methods=["GET"])
 def get_skills():
     try:
@@ -108,11 +147,14 @@ def create_skill():
         data = request.get_json() or {}
         if not data.get("name") or data.get("level") is None:
             return jsonify({"error": "'name' et 'level' sont obligatoires"}), 400
+        level = int(data["level"])
+        if not (0 <= level <= 100):
+            return jsonify({"error": "level doit etre entre 0 et 100"}), 400
         payload = {
-            "name": data["name"],
-            "level": int(data["level"]),
-            "tooltip_fr": data.get("tooltip_fr", ""),
-            "tooltip_en": data.get("tooltip_en", ""),
+            "name": data["name"].strip(),
+            "level": level,
+            "tooltip_fr": data.get("tooltip_fr", "").strip(),
+            "tooltip_en": data.get("tooltip_en", "").strip(),
             "order_index": int(data.get("order_index", 0)),
         }
         res = get_supabase().table("skills").insert(payload).execute()
@@ -125,8 +167,12 @@ def create_skill():
 def update_skill(sid):
     try:
         data = request.get_json() or {}
-        data.pop("id", None)
-        data.pop("created_at", None)
+        data.pop("id", None); data.pop("created_at", None)
+        if "level" in data:
+            level = int(data["level"])
+            if not (0 <= level <= 100):
+                return jsonify({"error": "level doit etre entre 0 et 100"}), 400
+            data["level"] = level
         res = get_supabase().table("skills").update(data).eq("id", sid).execute()
         return jsonify(res.data[0] if res.data else {}), 200
     except Exception as e:
@@ -141,12 +187,11 @@ def delete_skill(sid):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ── Contenu textuel (hero, about, footer) ─────────────────────────────────────
+# ── Contenu textuel ────────────────────────────────────────────────────────────
 @app.route("/api/content", methods=["GET"])
 def get_content():
     try:
         res = get_supabase().table("content").select("*").execute()
-        # retourner un dict {key: {value_fr, value_en}}
         result = {row["key"]: {"value_fr": row["value_fr"], "value_en": row["value_en"]} for row in res.data}
         return jsonify(result), 200
     except Exception as e:
@@ -159,9 +204,9 @@ def update_content(key):
         data = request.get_json() or {}
         payload = {}
         if "value_fr" in data:
-            payload["value_fr"] = data["value_fr"]
+            payload["value_fr"] = data["value_fr"].strip()
         if "value_en" in data:
-            payload["value_en"] = data["value_en"]
+            payload["value_en"] = data["value_en"].strip()
         if not payload:
             return jsonify({"error": "value_fr ou value_en requis"}), 400
         res = get_supabase().table("content").update(payload).eq("key", key).execute()
@@ -169,7 +214,7 @@ def update_content(key):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ── Services ──────────────────────────────────────────────────────────────────
+# ── Services ───────────────────────────────────────────────────────────────────
 @app.route("/api/services", methods=["GET"])
 def get_services():
     try:
@@ -183,11 +228,11 @@ def get_services():
 def create_service():
     try:
         data = request.get_json() or {}
-        if not data.get("text_fr") or not data.get("text_en"):
+        if not data.get("text_fr", "").strip() or not data.get("text_en", "").strip():
             return jsonify({"error": "'text_fr' et 'text_en' sont obligatoires"}), 400
         payload = {
-            "text_fr": data["text_fr"],
-            "text_en": data["text_en"],
+            "text_fr": data["text_fr"].strip(),
+            "text_en": data["text_en"].strip(),
             "order_index": int(data.get("order_index", 0)),
         }
         res = get_supabase().table("services").insert(payload).execute()
@@ -200,8 +245,7 @@ def create_service():
 def update_service(sid):
     try:
         data = request.get_json() or {}
-        data.pop("id", None)
-        data.pop("created_at", None)
+        data.pop("id", None); data.pop("created_at", None)
         res = get_supabase().table("services").update(data).eq("id", sid).execute()
         return jsonify(res.data[0] if res.data else {}), 200
     except Exception as e:
@@ -219,4 +263,4 @@ def delete_service(sid):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5001))
     print(f"Serveur Flask sur http://127.0.0.1:{port}")
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=False)
