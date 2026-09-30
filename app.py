@@ -32,10 +32,12 @@ def require_admin(f):
         return f(*args, **kwargs)
     return decorated
 
+# ── Sante ─────────────────────────────────────────────────────────────────────
 @app.route("/api/health", methods=["GET"])
 def health():
     return jsonify({"status": "online", "message": "API Flask operationnelle"}), 200
 
+# ── Auth ──────────────────────────────────────────────────────────────────────
 @app.route("/api/auth/login", methods=["POST"])
 def login():
     data = request.get_json() or {}
@@ -43,6 +45,7 @@ def login():
         return jsonify({"success": True, "token": ADMIN_PASSWORD}), 200
     return jsonify({"error": "Mot de passe incorrect"}), 401
 
+# ── Projets ───────────────────────────────────────────────────────────────────
 @app.route("/api/projects", methods=["GET"])
 def get_projects():
     try:
@@ -89,6 +92,7 @@ def delete_project(pid):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ── Competences ───────────────────────────────────────────────────────────────
 @app.route("/api/skills", methods=["GET"])
 def get_skills():
     try:
@@ -134,6 +138,81 @@ def delete_skill(sid):
     try:
         get_supabase().table("skills").delete().eq("id", sid).execute()
         return jsonify({"message": f"Competence {sid} supprimee"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ── Contenu textuel (hero, about, footer) ─────────────────────────────────────
+@app.route("/api/content", methods=["GET"])
+def get_content():
+    try:
+        res = get_supabase().table("content").select("*").execute()
+        # retourner un dict {key: {value_fr, value_en}}
+        result = {row["key"]: {"value_fr": row["value_fr"], "value_en": row["value_en"]} for row in res.data}
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/content/<string:key>", methods=["PUT"])
+@require_admin
+def update_content(key):
+    try:
+        data = request.get_json() or {}
+        payload = {}
+        if "value_fr" in data:
+            payload["value_fr"] = data["value_fr"]
+        if "value_en" in data:
+            payload["value_en"] = data["value_en"]
+        if not payload:
+            return jsonify({"error": "value_fr ou value_en requis"}), 400
+        res = get_supabase().table("content").update(payload).eq("key", key).execute()
+        return jsonify(res.data[0] if res.data else {}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ── Services ──────────────────────────────────────────────────────────────────
+@app.route("/api/services", methods=["GET"])
+def get_services():
+    try:
+        res = get_supabase().table("services").select("*").order("order_index").execute()
+        return jsonify(res.data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/services", methods=["POST"])
+@require_admin
+def create_service():
+    try:
+        data = request.get_json() or {}
+        if not data.get("text_fr") or not data.get("text_en"):
+            return jsonify({"error": "'text_fr' et 'text_en' sont obligatoires"}), 400
+        payload = {
+            "text_fr": data["text_fr"],
+            "text_en": data["text_en"],
+            "order_index": int(data.get("order_index", 0)),
+        }
+        res = get_supabase().table("services").insert(payload).execute()
+        return jsonify(res.data[0] if res.data else payload), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/services/<int:sid>", methods=["PUT"])
+@require_admin
+def update_service(sid):
+    try:
+        data = request.get_json() or {}
+        data.pop("id", None)
+        data.pop("created_at", None)
+        res = get_supabase().table("services").update(data).eq("id", sid).execute()
+        return jsonify(res.data[0] if res.data else {}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/services/<int:sid>", methods=["DELETE"])
+@require_admin
+def delete_service(sid):
+    try:
+        get_supabase().table("services").delete().eq("id", sid).execute()
+        return jsonify({"message": f"Service {sid} supprime"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
