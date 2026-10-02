@@ -248,6 +248,18 @@ def create_service():
         if not text_fr or not text_en:
             return jsonify({"error": "'text_fr' et 'text_en' sont obligatoires"}), 400
 
+        # Prevention doublons
+        title_only = text_fr.split("
+---
+")[0].strip().lower()
+        existing = get_supabase().table("services").select("id, text_fr").execute()
+        for item in (existing.data or []):
+            item_title = item.get("text_fr", "").split("
+---
+")[0].strip().lower()
+            if item_title == title_only:
+                return jsonify({"error": f"Un service avec ce titre existe deja (id={item['id']})"}), 409
+
         payload = {
             "text_fr": text_fr,
             "text_en": text_en,
