@@ -228,11 +228,29 @@ def get_services():
 def create_service():
     try:
         data = request.get_json() or {}
-        if not data.get("text_fr", "").strip() or not data.get("text_en", "").strip():
+        text_fr = data.get("text_fr", "").strip()
+        text_en = data.get("text_en", "").strip()
+
+        if not text_fr and (data.get("title_fr") or data.get("description_fr")):
+            t = data.get("title_fr", "").strip()
+            d = data.get("description_fr", "").strip()
+            text_fr = f"{t}
+---
+{d}" if d else t
+
+        if not text_en and (data.get("title_en") or data.get("description_en")):
+            t = data.get("title_en", "").strip()
+            d = data.get("description_en", "").strip()
+            text_en = f"{t}
+---
+{d}" if d else t
+
+        if not text_fr or not text_en:
             return jsonify({"error": "'text_fr' et 'text_en' sont obligatoires"}), 400
+
         payload = {
-            "text_fr": data["text_fr"].strip(),
-            "text_en": data["text_en"].strip(),
+            "text_fr": text_fr,
+            "text_en": text_en,
             "order_index": int(data.get("order_index", 0)),
         }
         res = get_supabase().table("services").insert(payload).execute()
@@ -246,7 +264,30 @@ def update_service(sid):
     try:
         data = request.get_json() or {}
         data.pop("id", None); data.pop("created_at", None)
-        res = get_supabase().table("services").update(data).eq("id", sid).execute()
+
+        payload = {}
+        if "text_fr" in data:
+            payload["text_fr"] = data["text_fr"]
+        elif "title_fr" in data or "description_fr" in data:
+            t = data.get("title_fr", "").strip()
+            d = data.get("description_fr", "").strip()
+            payload["text_fr"] = f"{t}
+---
+{d}" if d else t
+
+        if "text_en" in data:
+            payload["text_en"] = data["text_en"]
+        elif "title_en" in data or "description_en" in data:
+            t = data.get("title_en", "").strip()
+            d = data.get("description_en", "").strip()
+            payload["text_en"] = f"{t}
+---
+{d}" if d else t
+
+        if "order_index" in data:
+            payload["order_index"] = int(data["order_index"])
+
+        res = get_supabase().table("services").update(payload).eq("id", sid).execute()
         return jsonify(res.data[0] if res.data else {}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
