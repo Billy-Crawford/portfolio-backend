@@ -102,7 +102,21 @@ def create_project():
         for field in ["name_fr", "name_en", "description_fr", "description_en"]:
             if not data.get(field):
                 return jsonify({"error": f"'{field}' est obligatoire"}), 400
+
+        name_fr = data["name_fr"].strip()
+        name_en = data["name_en"].strip()
+
+        # Prevention doublons
+        existing = get_supabase().table("projects").select("id, name_fr, name_en").execute()
+        for item in (existing.data or []):
+            item_fr = (item.get("name_fr") or "").strip().lower()
+            item_en = (item.get("name_en") or "").strip().lower()
+            if (name_fr and item_fr == name_fr.lower()) or (name_en and item_en == name_en.lower()):
+                return jsonify({"error": f"Un projet avec ce nom existe deja (id={item['id']})"}), 409
+
         payload = {k: data[k] for k in ["name_fr","name_en","description_fr","description_en"]}
+        payload["name_fr"] = name_fr
+        payload["name_en"] = name_en
         payload["stack"] = data.get("stack", [])
         payload["link"] = data.get("link", "#")
         payload["order_index"] = int(data.get("order_index", 0))
@@ -147,11 +161,21 @@ def create_skill():
         data = request.get_json() or {}
         if not data.get("name") or data.get("level") is None:
             return jsonify({"error": "'name' et 'level' sont obligatoires"}), 400
+
+        name = data["name"].strip()
+
+        # Prevention doublons
+        existing = get_supabase().table("skills").select("id, name").execute()
+        for item in (existing.data or []):
+            item_name = (item.get("name") or "").strip().lower()
+            if item_name == name.lower():
+                return jsonify({"error": f"Une competence avec ce nom existe deja (id={item['id']})"}), 409
+
         level = int(data["level"])
         if not (0 <= level <= 100):
             return jsonify({"error": "level doit etre entre 0 et 100"}), 400
         payload = {
-            "name": data["name"].strip(),
+            "name": name,
             "level": level,
             "tooltip_fr": data.get("tooltip_fr", "").strip(),
             "tooltip_en": data.get("tooltip_en", "").strip(),
