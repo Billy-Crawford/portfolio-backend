@@ -1,12 +1,14 @@
 """
 Point d'entrée principal de l'API Flask du Portfolio.
-Initialise l'application, configure le CORS et enregistre les routes modulaires.
+Initialise l'application, configure le CORS, enregistre les routes modulaires
+et démarre le maintien en éveil automatique de Supabase.
 """
 
 from flask import Flask
 from flask_cors import CORS
 from config import ALLOWED_ORIGINS, PORT
 from routes import register_routes
+from middlewares.keep_alive import start_supabase_keep_alive
 
 
 def create_app() -> Flask:
@@ -22,6 +24,9 @@ def create_app() -> Flask:
 
     # Enregistrement de tous les modules de routes (Blueprints)
     register_routes(application)
+
+    # Démarrage du thread de maintien en éveil de Supabase
+    start_supabase_keep_alive()
 
     return application
 

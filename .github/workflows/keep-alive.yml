@@ -1,8 +1,8 @@
-name: Keep-alive Render Backend
+name: Keep-alive Render Backend & Supabase
 
 on:
   schedule:
-    # Exécuter toutes les 14 minutes
+    # Exécuter toutes les 14 minutes pour garder Render et Supabase éveillés
     - cron: '*/14 * * * *'
   workflow_dispatch: # Permet de lancer le script manuellement depuis GitHub
 
@@ -10,8 +10,21 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping backend API
+      - name: Ping backend API and query Supabase tables
         run: |
-          echo "Pinging the backend to prevent sleep..."
-          curl -s https://portfolio-backend-0xfo.onrender.com/api/health
-          echo -e "\n\nPing successful!"
+          BACKEND_URL="https://portfolio-backend-0xfo.onrender.com"
+          echo "=== 1. Ping /api/health (interroge les 4 tables Supabase) ==="
+          curl -fsSL --retry 3 --retry-delay 10 --max-time 90 "$BACKEND_URL/api/health"
+          echo -e "
+"
+
+          echo "=== 2. Simulation d'appel /api/projects ==="
+          curl -fsSL --retry 2 --retry-delay 5 --max-time 60 "$BACKEND_URL/api/projects" | head -c 250
+          echo -e "
+"
+
+          echo "=== 3. Simulation d'appel /api/skills ==="
+          curl -fsSL --retry 2 --retry-delay 5 --max-time 60 "$BACKEND_URL/api/skills" | head -c 250
+          echo -e "
+
+Ping Backend + Supabase terminé avec succès !"
